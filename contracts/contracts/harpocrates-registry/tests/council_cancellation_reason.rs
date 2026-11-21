@@ -4,7 +4,7 @@ use harpocrates_registry::{
 };
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger},
-    vec, Address, BytesN, Env, IntoVal as _, Map, Symbol, Val,
+    vec, Address, BytesN, Env, Map, Symbol, TryFromVal, TryIntoVal, Val,
 };
 
 fn b32(env: &Env, value: u8) -> BytesN<32> {
@@ -38,7 +38,7 @@ fn propose(client: &HarpocratesRegistryClient<'_>, issuer: &Address, payload: &B
     )
 }
 
-fn cancellation_reason(env: &Env, data: Val) -> CouncilCancellationReason {
+fn cancellation_reason(env: &Env, data: soroban_sdk::xdr::ScVal) -> CouncilCancellationReason {
     let data: Map<Symbol, Val> = data.try_into_val(env).unwrap();
     data.get(Symbol::new(env, "reason_code"))
         .unwrap()
@@ -53,17 +53,22 @@ fn reasoned_cancellation_emits_code_and_keeps_proposal_identity() {
     let proposal_id = propose(&client, &member, &b32(&env, 0x89));
     let _ = env.events().all();
 
-    client.cancel_council_proposal_with_reason(
+    client.cancel_council_proposal_reasoned(
         &member,
         &proposal_id,
         &CouncilCancellationReason::SecurityConcern,
     );
 
     let events = env.events().all();
-    assert_eq!(events.len(), 1);
-    let emitted_proposal_id: u32 = events[0].1.get(2).unwrap().try_into_val(&env).unwrap();
+    assert_eq!(events.events().len(), 1);
+    let event = &events.events()[0];
+    let body = match &event.body {
+        soroban_sdk::xdr::ContractEventBody::V0(body) => body,
+    };
+    let proposal_id_topic = Val::try_from_val(&env, body.topics.get(2).unwrap()).unwrap();
+    let emitted_proposal_id: u32 = proposal_id_topic.try_into_val(&env).unwrap();
     assert_eq!(emitted_proposal_id, proposal_id);
-    let reason_code = cancellation_reason(&env, events[0].2.clone());
+    let reason_code = cancellation_reason(&env, body.data.clone());
     assert_eq!(reason_code, CouncilCancellationReason::SecurityConcern);
 }
 
@@ -77,8 +82,12 @@ fn legacy_cancellation_entrypoint_emits_compatibility_reason() {
     client.cancel_council_proposal(&member, &proposal_id);
 
     let events = env.events().all();
-    assert_eq!(events.len(), 1);
-    let reason_code = cancellation_reason(&env, events[0].2.clone());
+    assert_eq!(events.events().len(), 1);
+    let event = &events.events()[0];
+    let body = match &event.body {
+        soroban_sdk::xdr::ContractEventBody::V0(body) => body,
+    };
+    let reason_code = cancellation_reason(&env, body.data.clone());
     assert_eq!(reason_code, CouncilCancellationReason::LegacyUnspecified);
 }
 
@@ -90,13 +99,13 @@ fn unauthorized_reasoned_cancellation_changes_no_state_or_events() {
     let _ = env.events().all();
     let unauthorized = Address::generate(&env);
 
-    let result = client.try_cancel_council_proposal_with_reason(
+    let result = client.try_cancel_council_proposal_reasoned(
         &unauthorized,
         &proposal_id,
         &CouncilCancellationReason::Other,
     );
 
     assert!(result.is_err());
-    assert_eq!(env.events().all().len(), 0);
+    assert_eq!(env.events().all().events().len(), 0);
     assert!(!client.get_council_proposal(&proposal_id).unwrap().cancelled);
 }

@@ -416,7 +416,7 @@ See [TIMELOCK.md](TIMELOCK.md) for action kinds, payload and target semantics, d
 
 ## Admin Council Proposal Cancellations
 
-Use `cancel_council_proposal_with_reason` to cancel an admin council proposal
+Use `cancel_council_proposal_reasoned` to cancel an admin council proposal
 with a `CouncilCancellationReason` code. The `CouncilProposalCancelled` event
 retains the proposal ID as its stable identity and includes the bounded reason
 code; do not include private notes or free-form text in cancellation events.

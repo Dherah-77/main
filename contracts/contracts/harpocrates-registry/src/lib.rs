@@ -4,8 +4,9 @@
 extern crate std;
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, Address,
-    Bytes, BytesN, Env, IntoVal, InvokeError, Symbol, Val, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, crypto::Hash,
+    panic_with_error, xdr::ToXdr, Address, Bytes, BytesN, Env, IntoVal, InvokeError, Symbol, Val,
+    Vec,
 };
 
 pub type SorobanVec<T> = Vec<T>;
@@ -527,7 +528,7 @@ pub const MAX_TIMELOCK_PROPOSALS_PAGE: u32 = 25;
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TimelockProposalPage {
-    pub proposals: SorobanVec<TimelockProposal>,
+    pub proposals: Vec<TimelockProposal>,
     /// Cursor for the next page (`Some(next_cursor)`), or `None` if end reached.
     pub next_cursor: Option<u32>,
 }
@@ -549,7 +550,7 @@ pub struct CredentialRootEntry {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CredentialRootPage {
-    pub roots: SorobanVec<CredentialRootEntry>,
+    pub roots: Vec<CredentialRootEntry>,
     /// Cursor for the next page (`Some(next_cursor)`), or `None` if end reached.
     pub next_cursor: Option<u32>,
 }
@@ -1668,7 +1669,7 @@ pub enum CouncilAction {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdminCouncil {
-    pub members: SorobanVec<Address>,
+    pub members: Vec<Address>,
     pub threshold: u32,
     pub created_at: u64,
     pub effective_at: u64,
@@ -1684,7 +1685,7 @@ pub struct CouncilProposal {
     pub payload: BytesN<32>,
     pub created_at: u64,
     pub expires_at: u64,
-    pub approvals: SorobanVec<Address>,
+    pub approvals: Vec<Address>,
     pub executed: bool,
     pub cancelled: bool,
 }
@@ -1781,7 +1782,7 @@ pub struct VerifierEntry {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifierPage {
-    pub entries: SorobanVec<VerifierEntry>,
+    pub entries: Vec<VerifierEntry>,
     pub next_cursor: Option<u32>,
     pub total_populated: u32,
 }
@@ -1848,6 +1849,24 @@ pub enum DataKey {
     Proposal(u32),
     /// Minimum timelock delay in seconds (#86).
     TimelockMinDelay,
+    /// Active admin council configuration.
+    AdminCouncil,
+    /// Sequential counter for admin council proposal IDs.
+    CouncilProposalSeq,
+    /// Admin council proposal by ID.
+    CouncilProposal(u32),
+    /// Source batch root record.
+    SourceBatch(BytesN<32>),
+    /// Bounded recent revocation-root history.
+    RevocationRoots,
+    /// Grace window for recently superseded revocation roots.
+    RevocationRootGraceWindow,
+    /// Number of registered receipt signers.
+    ReceiptSignerCount,
+    /// Registration quota for an issuer key.
+    IssuerQuota(Address),
+    /// Current registration quota usage for an issuer key.
+    IssuerQuotaUsage(Address),
     /// Schema definition by schema hash.
     Schema(BytesN<32>),
     /// Verifiable derivative lineage record keyed by output digest.
@@ -1856,6 +1875,8 @@ pub enum DataKey {
     TimestampClaim(BytesN<32>),
     /// Count of indexed children for a parent proof/digest (#335).
     LineageChildSeq(BytesN<32>),
+    /// Count of derivatives already charged against a parent proof/digest.
+    LineageChildCount(BytesN<32>),
     /// Child output digest at 1-based sequence for a parent (#335).
     LineageChild(BytesN<32>, u32),
     /// Versioned metadata envelope binding keyed by proof_id (#317).
@@ -1896,10 +1917,7 @@ pub enum RegistryError {
     UnknownCredentialRoot = 11,
     RevokedCredentialRoot = 12,
     HistorySaturated = 13,
-    /// The scoped-nullifier proof carries an epoch that does not match the
-    /// current on-chain epoch for its scope. Replaces the unused
-    /// `InvalidHistoryAction` slot so the wire code does not change.
-    StaleEpoch = 14,
+    InvalidHistoryAction = 14,
     InvalidReasonCode = 15,
     HistoryLimitExceeded = 16,
     AlreadyExpired = 17,
@@ -1950,11 +1968,6 @@ pub enum RegistryError {
     UnknownSchema = 50,
     InactiveSchema = 51,
     SchemaVersionMismatch = 52,
-    /// The cursor supplied to `list_verifiers` is out of range or malformed.
-    /// Returns a stable, privacy-safe failure that does not reveal set size.
-    InvalidCursor = 53,
-    /// The `limit` supplied to `list_verifiers` exceeds `MAX_VERIFIER_LIST_LIMIT`.
-    ListLimitExceeded = 54,
     // --- Restored feature errors (append-only; never renumber existing) ---
     /// A scoped-nullifier proof was generated for a stale scope epoch.
     StaleEpoch = 53,
@@ -1966,7 +1979,6 @@ pub enum RegistryError {
     BatchCountMismatch = 56,
     /// A lineage parent proof/lineage record was not found.
     InvalidLineage = 57,
-    ExpiredCredentialRoot = 58,
     /// A lineage edge would introduce a cycle.
     LineageCycle = 58,
     /// The requested lineage depth exceeds `MAX_LINEAGE_DEPTH`.
@@ -2035,6 +2047,22 @@ pub enum RegistryError {
     ReporterDisputesSaturated = 88,
     /// The action requires admin council threshold approvals.
     InsufficientApprovals = 89,
+    /// The cursor supplied to `list_verifiers` is out of range or malformed.
+    InvalidCursor = 90,
+    /// The `limit` supplied to `list_verifiers` exceeds `MAX_VERIFIER_LIST_LIMIT`.
+    ListLimitExceeded = 91,
+    /// A credential root has expired and cannot be used.
+    ExpiredCredentialRoot = 92,
+    /// An operation conflicts with the configured institutional roles.
+    RoleConflict = 93,
+    /// A source-batch inclusion proof is invalid.
+    InvalidInclusionProof = 94,
+    /// The issuer's registration quota is exhausted for the current window.
+    IssuerQuotaExhausted = 95,
+    /// The claimed lineage depth does not match the depth derived from parents.
+    LineageDepthMismatch = 96,
+    /// A parent has reached its maximum number of derived children.
+    LineageFanOutSaturated = 97,
 }
 
 #[contract]
@@ -2635,11 +2663,7 @@ impl HarpocratesRegistry {
     }
 
     /// Stage or queue legacy credential roots for bounded backfill during `upgrade_storage` (#731).
-    pub fn stage_credential_roots_for_backfill(
-        env: Env,
-        admin: Address,
-        roots: SorobanVec<BytesN<32>>,
-    ) {
+    pub fn stage_roots_for_backfill(env: Env, admin: Address, roots: Vec<BytesN<32>>) {
         require_admin(&env, &admin);
         let backfill_key = DataKey::CredentialRootsBackfillQueue;
         let mut queue: SorobanVec<BytesN<32>> = env
@@ -3126,7 +3150,7 @@ impl HarpocratesRegistry {
     pub fn set_admin_council(
         env: Env,
         admin: Address,
-        members: SorobanVec<Address>,
+        members: Vec<Address>,
         threshold: u32,
     ) {
         require_admin(&env, &admin);
@@ -3367,7 +3391,7 @@ impl HarpocratesRegistry {
 
     /// Cancel a council proposal using the compatibility reason code.
     ///
-    /// New callers should use `cancel_council_proposal_with_reason`.
+    /// New callers should use `cancel_council_proposal_reasoned`.
     pub fn cancel_council_proposal(env: Env, caller: Address, proposal_id: u32) {
         Self::cancel_council_proposal_internal(
             env,
@@ -3378,7 +3402,7 @@ impl HarpocratesRegistry {
     }
 
     /// Cancel a council proposal with a bounded, privacy-safe reason code.
-    pub fn cancel_council_proposal_with_reason(
+    pub fn cancel_council_proposal_reasoned(
         env: Env,
         caller: Address,
         proposal_id: u32,
@@ -4742,10 +4766,10 @@ impl HarpocratesRegistry {
     /// the published event always carry the derived depth.
     ///
     /// Fails with `LineageFanOutExceeded` (#60) when the parent set exceeds
-    /// `MAX_LINEAGE_FANOUT`, `LineageFanOutSaturated` (#79) when a parent
+    /// `MAX_LINEAGE_FANOUT`, `LineageFanOutSaturated` (#97) when a parent
     /// already has `MAX_LINEAGE_FANOUT` derivatives, `LineageCycle` (#58) for a
     /// self-referential edge, `LineageTooDeep` (#59) past `MAX_LINEAGE_DEPTH`,
-    /// `LineageDepthMismatch` (#80) for a forged depth, `DuplicateLineage` (#78)
+    /// `LineageDepthMismatch` (#96) for a forged depth, `DuplicateLineage` (#78)
     /// for an output digest that is already recorded, `LineageEmptyParents`
     /// (#76) for an empty parent set, `LineageParentUnavailable` (#77) for a
     /// revoked or expired proof parent, and `InvalidLineage` (#57) for a
@@ -4773,6 +4797,7 @@ impl HarpocratesRegistry {
             panic_with_error!(&env, RegistryError::DuplicateLineage);
         }
 
+        let derived_depth = validate_lineage(&env, &parent_proof_ids, &output_digest, depth);
         let parent_commitments = collect_lineage_parent_commitments(&env, &parent_proof_ids);
 
         let record = LineageRecord {
@@ -5025,12 +5050,43 @@ impl HarpocratesRegistry {
         if is_council_active(&env) {
             panic_with_error!(&env, RegistryError::InsufficientApprovals);
         }
+        let history: SorobanVec<RevocationRootEntry> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RevocationRoots)
+            .unwrap_or_else(|| {
+                let mut history = SorobanVec::new(&env);
+                if let Some(previous_root) = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, BytesN<32>>(&DataKey::RevocationRoot)
+                {
+                    if previous_root != revocation_root {
+                        history.push_back(RevocationRootEntry {
+                            root: previous_root,
+                            activation_ledger: 0,
+                        });
+                    }
+                }
+                history
+            });
+        let keep_from = history
+            .len()
+            .saturating_sub(MAX_REVOCATION_ROOT_HISTORY.saturating_sub(1));
+        let mut next_history = SorobanVec::new(&env);
+        for index in keep_from..history.len() {
+            next_history.push_back(history.get(index).unwrap());
+        }
+        next_history.push_back(RevocationRootEntry {
+            root: revocation_root.clone(),
+            activation_ledger: env.ledger().sequence(),
+        });
         env.storage()
             .persistent()
             .set(&DataKey::RevocationRoot, &revocation_root);
         env.storage()
             .persistent()
-            .set(&DataKey::RevocationRoots, &history);
+            .set(&DataKey::RevocationRoots, &next_history);
         RevocationRootSet { revocation_root }.publish(&env);
     }
 
@@ -6102,7 +6158,7 @@ impl HarpocratesRegistry {
         proof_id: BytesN<32>,
         cursor: u32,
         limit: u32,
-    ) -> SorobanVec<BytesN<32>> {
+    ) -> Vec<BytesN<32>> {
         let total: u32 = env
             .storage()
             .persistent()
@@ -6256,6 +6312,9 @@ fn receipt_signer_count(env: &Env) -> u32 {
         .get(&DataKey::ReceiptSignerCount)
         .unwrap_or(0u32)
 }
+
+const RECEIPT_ATTEST_DOMAIN: [u8; 29] = *b"harpocrates:receipt-digest:v1";
+const RECEIPT_ATTEST_PREIMAGE_LEN: u32 = 129;
 
 /// Domain-separated digest a receipt signer must sign for
 /// `commit_receipt_digest` to accept a commitment.
@@ -6891,8 +6950,16 @@ fn validate_lineage(
     let mut max_parent_depth: u32 = 0;
     for cursor in 0..parent_count {
         let parent = parent_proof_ids.get(cursor).unwrap();
+        for earlier in 0..cursor {
+            if parent_proof_ids.get(earlier).unwrap() == parent {
+                panic_with_error!(env, RegistryError::InvalidLineage);
+            }
+        }
 
         if parent == *output_digest {
+            panic_with_error!(env, RegistryError::LineageCycle);
+        }
+        if check_lineage_cycle(env, &parent, output_digest) {
             panic_with_error!(env, RegistryError::LineageCycle);
         }
         if env
@@ -6911,6 +6978,12 @@ fn validate_lineage(
             .persistent()
             .has(&DataKey::Lineage(parent.clone()))
         {
+            let lineage: LineageRecord = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Lineage(parent.clone()))
+                .unwrap();
+            max_parent_depth = max_parent_depth.max(lineage.depth);
             continue;
         }
         panic_with_error!(env, RegistryError::InvalidLineage);
@@ -6989,10 +7062,10 @@ fn collect_lineage_parent_commitments(
             ));
             continue;
         }
-        if check_lineage_cycle(env, &parent, output_digest) {
-            panic_with_error!(env, RegistryError::LineageCycle);
-        }
+        panic_with_error!(env, RegistryError::InvalidLineage);
     }
+
+    commitments
 }
 
 fn check_lineage_cycle(env: &Env, proof_id: &BytesN<32>, target: &BytesN<32>) -> bool {
